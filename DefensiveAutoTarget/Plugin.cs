@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace DefensiveAutoTarget
 {
-    [BepInPlugin("com.defensiveautotarget", "Defensive Auto Target", "1.0.0")]
+    [BepInPlugin("com.defensiveautotarget", "Defensive Auto Target", "0.5.0")]
     public class Plugin : BaseUnityPlugin
     {
         public static ConfigEntry<KeyCode> AutoTargetKey;

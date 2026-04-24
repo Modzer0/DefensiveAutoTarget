@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
-    <AssemblyName>DefensiveAutoTarget</AssemblyName>
+    <AssemblyName>DefensiveAutoTarget_0.5.0</AssemblyName>
     <RootNamespace>DefensiveAutoTarget</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>0.5.0</Version>
     <LangVersion>latest</LangVersion>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <OutputPath>bin\Release\</OutputPath>
