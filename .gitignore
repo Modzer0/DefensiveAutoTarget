@@ -1,0 +1,11 @@
+NO decompile/
+QOL decompile/
+tasks.md
+requirements.md
+design.md
+.kiro
+.config.kiro
+DefensiveAutoTarget/bin/
+DefensiveAutoTarget/obj/
+DefensiveAutoTarget/bin
+DefensiveAutoTarget/obj
