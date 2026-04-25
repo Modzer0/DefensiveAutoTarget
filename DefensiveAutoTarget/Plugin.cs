@@ -95,13 +95,15 @@ namespace DefensiveAutoTarget
             combatHud.SelectUnit(missile);
         }
 
-        // Host: advertise mod presence in lobby data when hosting
+        // Host/single-player: we have the mod, so enable immediately.
+        // Also advertise in lobby data for clients joining later.
         [HarmonyPatch(typeof(NetworkManagerNuclearOption), "StartHostAsync")]
         private class HostAdvertisePatch
         {
             [HarmonyPostfix]
             private static void Postfix(NetworkManagerNuclearOption __instance)
             {
+                HostHasMod = true;
                 __instance.StartCoroutine(SetLobbyData());
             }
 
@@ -114,14 +116,13 @@ namespace DefensiveAutoTarget
                     if (lobbyId.m_SteamID != 0UL)
                     {
                         SteamMatchmaking.SetLobbyData(lobbyId, LobbyDataKey, LobbyDataValue);
-                        HostHasMod = true;
                         yield break;
                     }
                 }
             }
         }
 
-        // Client: check lobby data after joining to see if host has the mod
+        // Client joining a player-hosted game: check if host advertised the mod.
         [HarmonyPatch(typeof(SteamLobby), "TryJoinLobby")]
         private class ClientCheckPatch
         {
@@ -150,7 +151,18 @@ namespace DefensiveAutoTarget
             }
         }
 
-        // Input patch: only fire if host has the mod
+        // Reset on disconnect so stale state doesn't carry over.
+        [HarmonyPatch(typeof(NetworkManagerNuclearOption), "Stop")]
+        private class ResetOnDisconnectPatch
+        {
+            [HarmonyPostfix]
+            private static void Postfix()
+            {
+                HostHasMod = false;
+            }
+        }
+
+        // Input patch: only fire if host has the mod.
         [HarmonyPatch(typeof(PilotPlayerState), "PlayerControls")]
         private class AutoTargetMissilePatch
         {
