@@ -10,15 +10,17 @@ using UnityEngine;
 
 namespace DefensiveAutoTarget
 {
-    [BepInPlugin(PluginGUID, "Defensive Auto Target", "0.5.0")]
+    [BepInPlugin(PluginGUID, "Defensive Auto Target", "0.5.1")]
     public class Plugin : BaseUnityPlugin
     {
         public const string PluginGUID = "com.defensiveautotarget";
         private const string LobbyDataKey = "dat_mod";
-        private const string LobbyDataValue = "0.5.0";
+        private const string MemberDataKey = "dat_mod";
+        private const string ModVersion = "0.5.1";
 
         public static ConfigEntry<KeyCode> AutoTargetKey;
-        public static bool HostHasMod;
+        public static bool ModEnabled;
+        public static bool IsSinglePlayer;
         public static Plugin Instance;
         private Harmony _harmony;
 
@@ -73,6 +75,22 @@ namespace DefensiveAutoTarget
             return new CSteamID();
         }
 
+        /// <summary>
+        /// Check if every member in the lobby has set their dat_mod member data.
+        /// </summary>
+        private static bool AllLobbyMembersHaveMod(CSteamID lobbyId)
+        {
+            int count = SteamMatchmaking.GetNumLobbyMembers(lobbyId);
+            for (int i = 0; i < count; i++)
+            {
+                CSteamID member = SteamMatchmaking.GetLobbyMemberByIndex(lobbyId, i);
+                string val = SteamMatchmaking.GetLobbyMemberData(lobbyId, member, MemberDataKey);
+                if (string.IsNullOrEmpty(val))
+                    return false;
+            }
+            return count > 0;
+        }
+
         public static void AutoTargetNearestMissile(Aircraft aircraft)
         {
             if (aircraft == null || aircraft.disabled || aircraft.weaponManager == null)
@@ -95,19 +113,28 @@ namespace DefensiveAutoTarget
             combatHud.SelectUnit(missile);
         }
 
-        // Host/single-player: we have the mod, so enable immediately.
-        // Also advertise in lobby data for clients joining later.
+        // Single player: enable immediately, no lobby needed.
+        // Multiplayer host: advertise in lobby data, set own member data, start polling.
         [HarmonyPatch(typeof(NetworkManagerNuclearOption), "StartHostAsync")]
-        private class HostAdvertisePatch
+        private class HostStartPatch
         {
             [HarmonyPostfix]
-            private static void Postfix(NetworkManagerNuclearOption __instance)
+            private static void Postfix(NetworkManagerNuclearOption __instance, HostOptions options)
             {
-                HostHasMod = true;
-                __instance.StartCoroutine(SetLobbyData());
+                IsSinglePlayer = options.SocketType == SocketType.Offline;
+
+                if (IsSinglePlayer)
+                {
+                    ModEnabled = true;
+                    return;
+                }
+
+                // Multiplayer host: set lobby data + own member data, then poll
+                ModEnabled = false;
+                __instance.StartCoroutine(HostSetup());
             }
 
-            private static IEnumerator SetLobbyData()
+            private static IEnumerator HostSetup()
             {
                 for (int i = 0; i < 10; i++)
                 {
@@ -115,61 +142,99 @@ namespace DefensiveAutoTarget
                     var lobbyId = GetCurrentLobby();
                     if (lobbyId.m_SteamID != 0UL)
                     {
-                        SteamMatchmaking.SetLobbyData(lobbyId, LobbyDataKey, LobbyDataValue);
+                        SteamMatchmaking.SetLobbyData(lobbyId, LobbyDataKey, ModVersion);
+                        SteamMatchmaking.SetLobbyMemberData(lobbyId, MemberDataKey, ModVersion);
+                        ModEnabled = AllLobbyMembersHaveMod(lobbyId);
                         yield break;
                     }
                 }
             }
         }
 
-        // Client joining a player-hosted game: check if host advertised the mod.
+        // Client joining: set own member data so host and others can see it.
         [HarmonyPatch(typeof(SteamLobby), "TryJoinLobby")]
-        private class ClientCheckPatch
+        private class ClientJoinPatch
         {
             [HarmonyPostfix]
             private static void Postfix()
             {
+                IsSinglePlayer = false;
+                ModEnabled = false;
                 if (Instance != null)
-                    Instance.StartCoroutine(CheckHostMod());
+                    Instance.StartCoroutine(ClientSetup());
             }
 
-            private static IEnumerator CheckHostMod()
+            private static IEnumerator ClientSetup()
             {
-                HostHasMod = false;
-
                 for (int i = 0; i < 10; i++)
                 {
                     yield return new WaitForSeconds(1f);
                     var lobbyId = GetCurrentLobby();
                     if (lobbyId.m_SteamID != 0UL)
                     {
-                        string val = SteamMatchmaking.GetLobbyData(lobbyId, LobbyDataKey);
-                        HostHasMod = !string.IsNullOrEmpty(val);
+                        // Advertise that we have the mod
+                        SteamMatchmaking.SetLobbyMemberData(lobbyId, MemberDataKey, ModVersion);
+
+                        // Check if host has the mod (lobby data)
+                        string hostVal = SteamMatchmaking.GetLobbyData(lobbyId, LobbyDataKey);
+                        if (string.IsNullOrEmpty(hostVal))
+                        {
+                            ModEnabled = false;
+                            yield break;
+                        }
+
+                        // Check all members
+                        ModEnabled = AllLobbyMembersHaveMod(lobbyId);
                         yield break;
                     }
                 }
             }
         }
 
-        // Reset on disconnect so stale state doesn't carry over.
+        // Re-check whenever a player spawns (joins mid-game).
+        // This runs on the host only (SpawnCharacter is server-side).
+        [HarmonyPatch(typeof(NetworkManagerNuclearOption), "SpawnCharacter")]
+        private class PlayerSpawnPatch
+        {
+            [HarmonyPostfix]
+            private static void Postfix()
+            {
+                if (IsSinglePlayer)
+                    return;
+                if (Instance != null)
+                    Instance.StartCoroutine(RecheckAfterDelay());
+            }
+
+            private static IEnumerator RecheckAfterDelay()
+            {
+                // Give the new player time to set their member data
+                yield return new WaitForSeconds(5f);
+                var lobbyId = GetCurrentLobby();
+                if (lobbyId.m_SteamID != 0UL)
+                    ModEnabled = AllLobbyMembersHaveMod(lobbyId);
+            }
+        }
+
+        // Reset on disconnect.
         [HarmonyPatch(typeof(NetworkManagerNuclearOption), "Stop")]
         private class ResetOnDisconnectPatch
         {
             [HarmonyPostfix]
             private static void Postfix()
             {
-                HostHasMod = false;
+                ModEnabled = false;
+                IsSinglePlayer = false;
             }
         }
 
-        // Input patch: only fire if host has the mod.
+        // Input: only fire if mod is enabled (single player or all players have it).
         [HarmonyPatch(typeof(PilotPlayerState), "PlayerControls")]
         private class AutoTargetMissilePatch
         {
             [HarmonyPostfix]
             private static void Postfix()
             {
-                if (!HostHasMod)
+                if (!ModEnabled)
                     return;
                 if (AutoTargetKey.Value == KeyCode.None)
                     return;
